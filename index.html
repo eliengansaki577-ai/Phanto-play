@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phanto – le petit fantôme qui court</title>
+<meta name="description" content="Phanto, un jeu pixel art de HUSTLER : cours, saute, esquive. Joue gratuitement dans ton navigateur ou installe l'appli Android.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Phanto – par HUSTLER">
+<meta property="og:description" content="Cours, saute, esquive ! Joue tout de suite ou installe l'appli Android.">
+<meta property="og:image" content="https://eliengansaki577-ai.github.io/Phanto-play/img/og.png">
+<meta property="og:url" content="https://eliengansaki577-ai.github.io/Phanto-play/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#d7263d">
+<link rel="icon" href="img/icon.png">
+<link rel="apple-touch-icon" href="img/icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  :root { --red: #d7263d; --dark: #7a0f1c; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: #000; color: #fff; font-family: 'Press Start 2P', monospace; image-rendering: pixelated; }
+  a { color: inherit; }
+  .hero { background: var(--red); padding: 48px 20px 40px; text-align: center; border-bottom: 6px solid #fff; }
+  .hero h1 { margin: 0; font-size: clamp(40px, 13vw, 76px); letter-spacing: 4px; text-shadow: 5px 5px 0 var(--dark); }
+  .hero .by { margin-top: 18px; font-size: 12px; letter-spacing: 3px; opacity: .95; }
+  .ghost { width: 78px; height: 66px; margin: 28px auto 0; animation: float 1.6s ease-in-out infinite; }
+  @keyframes float { 50% { transform: translateY(-8px); } }
+  main { max-width: 640px; margin: 0 auto; padding: 32px 20px 48px; }
+  .btn { display: flex; align-items: center; justify-content: center; gap: 12px; width: 100%; padding: 22px 16px; margin: 0 0 16px;
+         font: inherit; font-size: 15px; text-decoration: none; border: 4px solid #fff; background: #000; color: #fff; cursor: pointer;
+         box-shadow: 6px 6px 0 #fff; transition: transform .08s, box-shadow .08s; }
+  .btn:active { transform: translate(4px, 4px); box-shadow: 2px 2px 0 #fff; }
+  .btn.primary { background: #fff; color: #000; box-shadow: 6px 6px 0 var(--red); }
+  .btn.primary:active { box-shadow: 2px 2px 0 var(--red); }
+  .note { font-size: 9px; line-height: 1.9; opacity: .75; margin: 4px 0 30px; text-align: center; }
+  h2 { font-size: 13px; margin: 40px 0 18px; letter-spacing: 2px; }
+  .shots { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 10px; scroll-snap-type: x mandatory; }
+  .shots img { width: 46%; min-width: 150px; border: 3px solid #fff; scroll-snap-align: start; }
+  ol { padding-left: 0; list-style: none; counter-reset: s; margin: 0; }
+  ol li { counter-increment: s; font-size: 10px; line-height: 2; margin-bottom: 14px; padding-left: 40px; position: relative; }
+  ol li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 26px; height: 26px; background: #fff; color: #000;
+                  display: flex; align-items: center; justify-content: center; font-size: 10px; }
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .mode { border: 3px solid #fff; padding: 14px 12px; font-size: 9px; line-height: 1.9; }
+  .mode b { display: block; font-size: 11px; margin-bottom: 6px; color: #fff; }
+  footer { text-align: center; font-size: 9px; opacity: .6; padding: 30px 20px 40px; border-top: 3px dashed #333; line-height: 2; }
+</style>
+</head>
+<body>
+<section class="hero">
+  <h1>PHANTO</h1>
+  <div class="by" data-t="by">PAR HUSTLER</div>
+  <svg class="ghost" viewBox="0 0 13 11" shape-rendering="crispEdges" aria-hidden="true"><g fill="#fff"><rect x="4" y="0" width="5" height="1"/><rect x="2" y="1" width="9" height="1"/><rect x="1" y="2" width="11" height="1"/><rect x="1" y="3" width="4" height="1"/><rect x="6" y="3" width="2" height="1"/><rect x="9" y="3" width="3" height="1"/><rect x="1" y="4" width="4" height="1"/><rect x="6" y="4" width="2" height="1"/><rect x="9" y="4" width="3" height="1"/><rect x="0" y="5" width="13" height="1"/><rect x="0" y="6" width="13" height="1"/><rect x="1" y="7" width="12" height="1"/><rect x="1" y="8" width="11" height="1"/><rect x="1" y="9" width="2" height="1"/><rect x="4" y="9" width="3" height="1"/><rect x="8" y="9" width="3" height="1"/><rect x="2" y="10" width="1" height="1"/><rect x="5" y="10" width="1" height="1"/><rect x="9" y="10" width="1" height="1"/></g></svg>
+</section>
+
+<main>
+  <a class="btn primary" href="play.html" data-t="play">▶ JOUER MAINTENANT</a>
+  <a class="btn" href="Phanto.apk" download data-t="apk">⬇ APPLI ANDROID (APK)</a>
+  <p class="note" data-t="note">Gratuit · Sans pub · Marche aussi sur iPhone avec le bouton « Jouer »</p>
+
+  <h2 data-t="modesT">AU MENU</h2>
+  <div class="modes">
+    <div class="mode"><b data-t="m1">INFINI</b><span data-t="m1d">Cours le plus loin possible. Ça accélère sans fin.</span></div>
+    <div class="mode"><b data-t="m2">SCÉNARIO</b><span data-t="m2d">12 niveaux, 36 étoiles à attraper.</span></div>
+    <div class="mode"><b data-t="m3">PLUIE</b><span data-t="m3d">Esquive tout ce qui tombe du ciel.</span></div>
+    <div class="mode"><b data-t="m4">KART</b><span data-t="m4d">Change de voie, évite les obstacles.</span></div>
+  </div>
+
+  <h2 data-t="shotsT">CAPTURES</h2>
+  <div class="shots">
+    <img src="img/shot1.png" alt="Menu de Phanto">
+    <img src="img/shot2.png" alt="Mode scénario">
+    <img src="img/shot3.png" alt="Mini-jeu Kart">
+    <img src="img/shot4.png" alt="Boutique de skins">
+  </div>
+
+  <h2 data-t="howT">INSTALLER SUR ANDROID</h2>
+  <ol>
+    <li data-t="h1">Appuie sur « Appli Android » pour télécharger Phanto.apk.</li>
+    <li data-t="h2">Ouvre le fichier depuis tes téléchargements (app « Fichiers »).</li>
+    <li data-t="h3">Autorise « Installer des applis inconnues », puis Installer. Si Play Protect prévient, choisis « Installer quand même ».</li>
+  </ol>
+</main>
+
+<footer>© HUSTLER · PHANTO</footer>
+
+<script>
+  const EN = {
+    by: 'BY HUSTLER', play: '▶ PLAY NOW', apk: '⬇ ANDROID APP (APK)',
+    note: 'Free · No ads · Works on iPhone too with the "Play" button',
+    modesT: 'GAME MODES', m1: 'ENDLESS', m1d: 'Run as far as you can. It keeps speeding up.',
+    m2: 'STORY', m2d: '12 levels, 36 stars to grab.', m3: 'RAIN', m3d: 'Dodge everything falling from the sky.',
+    m4: 'KART', m4d: 'Switch lanes, avoid obstacles.', shotsT: 'SCREENSHOTS', howT: 'INSTALL ON ANDROID',
+    h1: 'Tap "Android app" to download Phanto.apk.', h2: 'Open the file from your downloads ("Files" app).',
+    h3: 'Allow "Install unknown apps", then Install. If Play Protect warns you, choose "Install anyway".'
+  };
+  if (!(navigator.language || 'fr').toLowerCase().startsWith('fr')) {
+    document.documentElement.lang = 'en';
+    document.querySelectorAll('[data-t]').forEach(el => { const v = EN[el.dataset.t]; if (v) el.textContent = v; });
+  }
+</script>
+</body>
+</html>
