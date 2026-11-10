@@ -18,9 +18,9 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <style>
-  :root { --red: #d7263d; --dark: #7a0f1c; }
+  :root { --red: #d7263d; --dark: #7a0f1c; --bg: #15122b; --mint: #5ff0b4; }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin: 0; background: #000; color: #fff; font-family: 'Press Start 2P', monospace; image-rendering: pixelated; }
+  html, body { margin: 0; background: var(--bg); color: #fff; font-family: 'Press Start 2P', monospace; image-rendering: pixelated; }
   a { color: inherit; }
   .hero { background: var(--red); padding: 48px 20px 40px; text-align: center; border-bottom: 6px solid #fff; }
   .hero h1 { margin: 0; font-size: clamp(40px, 13vw, 76px); letter-spacing: 4px; text-shadow: 5px 5px 0 var(--dark); }
@@ -29,10 +29,10 @@
   @keyframes float { 50% { transform: translateY(-8px); } }
   main { max-width: 640px; margin: 0 auto; padding: 32px 20px 48px; }
   .btn { display: flex; align-items: center; justify-content: center; gap: 12px; width: 100%; padding: 22px 16px; margin: 0 0 16px;
-         font: inherit; font-size: 15px; text-decoration: none; border: 4px solid #fff; background: #000; color: #fff; cursor: pointer;
+         font: inherit; font-size: 15px; text-decoration: none; border: 4px solid #fff; background: var(--bg); color: #fff; cursor: pointer;
          box-shadow: 6px 6px 0 #fff; transition: transform .08s, box-shadow .08s; }
   .btn:active { transform: translate(4px, 4px); box-shadow: 2px 2px 0 #fff; }
-  .btn.primary { background: #fff; color: #000; box-shadow: 6px 6px 0 var(--red); }
+  .btn.primary { background: var(--mint); color: var(--bg); border-color: var(--mint); box-shadow: 6px 6px 0 var(--red); }
   .btn.primary:active { box-shadow: 2px 2px 0 var(--red); }
   .note { font-size: 9px; line-height: 1.9; opacity: .75; margin: 4px 0 30px; text-align: center; }
   h2 { font-size: 13px; margin: 40px 0 18px; letter-spacing: 2px; }
@@ -63,16 +63,16 @@
   <h2 data-t="modesT">AU MENU</h2>
   <div class="modes">
     <div class="mode"><b data-t="m1">INFINI</b><span data-t="m1d">Cours le plus loin possible. Ça accélère sans fin.</span></div>
-    <div class="mode"><b data-t="m2">SCÉNARIO</b><span data-t="m2d">12 niveaux, 36 étoiles à attraper.</span></div>
-    <div class="mode"><b data-t="m3">PLUIE</b><span data-t="m3d">Esquive tout ce qui tombe du ciel.</span></div>
-    <div class="mode"><b data-t="m4">KART</b><span data-t="m4d">Change de voie, évite les obstacles.</span></div>
+    <div class="mode"><b data-t="m2">SCÉNARIO</b><span data-t="m2d">120 niveaux, 360 étoiles à attraper.</span></div>
+    <div class="mode"><b data-t="m3">4 MONDES</b><span data-t="m3d">Brume, gravité inversée, lune : chaque monde change les règles.</span></div>
+    <div class="mode"><b data-t="m4">SKINS</b><span data-t="m4d">51 fantômes à débloquer, dont des skins de saison.</span></div>
   </div>
 
   <h2 data-t="shotsT">CAPTURES</h2>
   <div class="shots">
     <img src="img/shot1.png" alt="Menu de Phanto">
-    <img src="img/shot2.png" alt="Mode scénario">
-    <img src="img/shot3.png" alt="Mini-jeu Kart">
+    <img src="img/shot2.png" alt="Forêt brumeuse">
+    <img src="img/shot3.png" alt="Manoir inversé">
     <img src="img/shot4.png" alt="Boutique de skins">
   </div>
 
@@ -91,8 +91,8 @@
     by: 'BY HUSTLER', play: '▶ PLAY NOW', apk: '⬇ ANDROID APP (APK)',
     note: 'Free · No ads · Works on iPhone too with the "Play" button',
     modesT: 'GAME MODES', m1: 'ENDLESS', m1d: 'Run as far as you can. It keeps speeding up.',
-    m2: 'STORY', m2d: '12 levels, 36 stars to grab.', m3: 'RAIN', m3d: 'Dodge everything falling from the sky.',
-    m4: 'KART', m4d: 'Switch lanes, avoid obstacles.', shotsT: 'SCREENSHOTS', howT: 'INSTALL ON ANDROID',
+    m2: 'STORY', m2d: '120 levels, 360 stars to grab.', m3: '4 WORLDS', m3d: 'Fog, flipped gravity, the moon: each world changes the rules.',
+    m4: 'SKINS', m4d: '51 ghosts to unlock, including seasonal skins.', shotsT: 'SCREENSHOTS', howT: 'INSTALL ON ANDROID',
     h1: 'Tap "Android app" to download Phanto.apk.', h2: 'Open the file from your downloads ("Files" app).',
     h3: 'Allow "Install unknown apps", then Install. If Play Protect warns you, choose "Install anyway".'
   };
