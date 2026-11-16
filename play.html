@@ -347,6 +347,69 @@ function dither(color, density = 2) {
   return p;
 }
 
+/* ================= Décors en couches (v1.6) : plus c'est loin, plus les pixels sont fins ================= */
+function loadImg(src) { const i = new Image(); i.src = src; return i; }
+const BGL = [0, 1, 2, 3].map(b => ({ s: loadImg('bg/b' + b + 's.png'), f: loadImg('bg/b' + b + 'f.png'), m: loadImg('bg/b' + b + 'm.png'), g: loadImg('bg/b' + b + 'g.png') }));
+const imgOk = i => i.complete && i.naturalWidth > 0;
+function drawLayer(im, k, sx, y) {
+  const w = im.width / k, h = im.height / k;
+  const x = Math.round(-(((sx % w) + w) % w) * k) / k;
+  ctx.drawImage(im, x, y, w, h);
+  if (x + w < W) ctx.drawImage(im, x + w, y, w, h);
+}
+// ciel fixe, collines lointaines x0.12, décor du milieu x0.35, sol x1
+function drawBackdrop(b, sc, dy = 0) {
+  const L = BGL[b];
+  if (!imgOk(L.s) || !imgOk(L.f) || !imgOk(L.m) || !imgOk(L.g)) return false;
+  if (-80 + dy > -OY) ctx.drawImage(L.s, 0, 0, L.s.width, 1, 0, -OY - 1, W, -80 + dy + OY + 2);
+  ctx.drawImage(L.s, 0, -80 + dy, W, L.s.height / 3);
+  ctx.fillStyle = '#ffffff';
+  for (const s of stars) if (Math.sin(t * 0.05 + s.p * 9) > 0.93) ctx.fillRect(r2(s.x), r2(s.y * 0.6 - 60 + dy), 0.5, 0.5);
+  drawLayer(L.f, 3, sc * 0.12, -80 + dy);
+  drawLayer(L.m, 2, sc * 0.35, -80 + dy);
+  drawLayer(L.g, 2, sc, GY + dy);
+  ctx.fillStyle = FG;
+  return true;
+}
+// sprites ombrés : contour sombre, lumière en haut à gauche, ombre en bas à droite, grain
+const shadeCache = new WeakMap();
+function shadeGrid(rows) {
+  let g = shadeCache.get(rows); if (g) return g;
+  const src = hd(rows), h = src.length, w = Math.max(...src.map(r => r.length));
+  const on = (r, c) => r >= 0 && r < h && c >= 0 && c < w && src[r][c] === '#';
+  g = [];
+  for (let r = -1; r <= h; r++) {
+    let s = '';
+    for (let c = -1; c <= w; c++) {
+      if (on(r, c)) {
+        if (!on(r + 1, c) || !on(r, c + 1)) s += 'd';
+        else if (!on(r - 1, c) || !on(r, c - 1)) s += 'l';
+        else if (!on(r + 2, c) || !on(r, c + 2)) s += 'd';
+        else s += hash(r * 31 + c * 7 + w) < 0.1 ? 'x' : '#';
+      } else s += (on(r - 1, c) || on(r + 1, c) || on(r, c - 1) || on(r, c + 1)) ? 'o' : '.';
+    }
+    g.push(s);
+  }
+  shadeCache.set(rows, g); return g;
+}
+function mixHex(a, b, f) {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const m = sh => Math.round(((pa >> sh) & 255) * (1 - f) + ((pb >> sh) & 255) * f);
+  return '#' + ((1 << 24) | (m(16) << 16) | (m(8) << 8) | m(0)).toString(16).slice(1);
+}
+const palCache = {};
+function pal(base, light, dark) {
+  const key = base + light + dark;
+  return palCache[key] || (palCache[key] = { o: '#07050f', b: base, l: light || mixHex(base, '#ffffff', 0.42), d: dark || mixHex(base, '#120a26', 0.5), x: mixHex(base, '#120a26', 0.25) });
+}
+function sprShade(rows, x, y, P, flip = false) {
+  const g = shadeGrid(rows), X = r2(x) - 1, Y = r2(y) - 1;
+  if (flip) { ctx.save(); ctx.translate(0, 2 * Y + g.length); ctx.scale(1, -1); }
+  for (const ch of 'o#xld') { ctx.fillStyle = P[ch === '#' ? 'b' : ch]; grid(g, X, Y, 1, ch); }
+  if (flip) ctx.restore();
+  ctx.fillStyle = FG;
+}
+
 /* ================= Police bitmap ================= */
 const F0 = {
 A:['01110','10001','10001','11111','10001','10001','10001'], B:['11110','10001','10001','11110','10001','10001','11110'],
@@ -383,10 +446,36 @@ const ACC = { 'É':['E',ACU],'È':['E',GRA],'Ê':['E',CIR],'Á':['A',ACU],'À':[
   'Ó':['O',ACU],'Ô':['O',CIR],'Õ':['O',TIL],'Ö':['O',UML],'Í':['I',ACU],'Ú':['U',ACU],'Ü':['U',UML],'Ñ':['N',TIL] };
 function glyph(g, x, y, s, bold) { if (s >= 2) grid(hd(g), x, y, s / 2, '#', bold ? 1 : 0); else grid(g, x, y, s, '#', bold ? 1 : 0); }
 const textW = (str, s) => String(str).length * 6 * s - s;
-function text(str, x, y, s = 1, bold = false, align = 'c', color = null) {
+// Texte trop long pour sa case : il défile en va-et-vient (pause, glisse, pause, revient).
+// maxW = largeur disponible (case) ; sans maxW, le texte reste au moins dans l'écran.
+function scrollOff(over, key) {
+  const sp = 0.4, hold = 70, run = over / sp, per = 2 * (hold + run);
+  const ph = (t + (key % 97) * 7) % per;
+  const f = ph < hold ? 0 : ph < hold + run ? (ph - hold) / run : ph < 2 * hold + run ? 1 : 1 - (ph - 2 * hold - run) / run;
+  return Math.round(over * f * 2) / 2;
+}
+const hasAcc = str => /[ÉÈÊÁÀÂÃÄÓÔÕÖÍÚÜÑ]/.test(String(str).toUpperCase());
+const fitS = (str, s, maxW) => { while (s > 1 && textW(String(str).toUpperCase(), s) > maxW) s--; return s; };
+function audit(o) { if (window.__audit) { const m = ctx.getTransform(); window.__audit.push({ ...o, x0: (m.a * o.x0 + m.e) / SCALE, x1: (m.a * o.x1 + m.e) / SCALE, y0: (m.d * o.y0 + m.f) / SCALE, y1: (m.d * o.y1 + m.f) / SCALE }); } }
+function text(str, x, y, s = 1, bold = false, align = 'c', color = null, maxW = null) {
   str = String(str).toUpperCase();
+  const tw = textW(str, s);
+  if (maxW == null) { // garde-fou : jamais hors de l'écran
+    const m = ctx.getTransform(), sx = (m.a * x + m.e) / SCALE;
+    const room = align === 'c' ? 2 * Math.min(sx - 3, W - 3 - sx) : align === 'r' ? sx - 3 : W - 3 - sx;
+    if (tw > room) maxW = Math.max(12, room);
+  }
+  if (maxW != null && tw > maxW + 0.01) {
+    const x0 = align === 'c' ? x - maxW / 2 : align === 'r' ? x - maxW : x;
+    ctx.save(); ctx.beginPath(); ctx.rect(x0, y - 4 * s, maxW, 13 * s); ctx.clip();
+    window.__auditMute = true; text(str, x0 - scrollOff(tw - maxW, str.length * 13 + str.charCodeAt(0)), y, s, bold, 'l', color, Infinity); window.__auditMute = false;
+    ctx.restore();
+    audit({ k: 't', str, scroll: true, x0, x1: x0 + maxW, y0: y - (hasAcc(str) ? 3 * s : 0), y1: y + 7 * s });
+    return;
+  }
   if (color) ctx.fillStyle = color;
-  let cx = align === 'c' ? Math.round(x - textW(str, s) / 2) : align === 'r' ? x - textW(str, s) : x;
+  let cx = align === 'c' ? Math.round(x - tw / 2) : align === 'r' ? x - tw : x;
+  if (!window.__auditMute) audit({ k: 't', str, x0: cx, x1: cx + tw, y0: y - (/[ÉÈÊÁÀÂÃÄÓÔÕÖÍÚÜÑ]/.test(str) ? 3 * s : 0), y1: y + (str.includes('Ç') ? 9 : 7) * s });
   for (const ch of str) {
     if (ACC[ch]) { glyph(F[ACC[ch][0]], cx, y, s, bold); glyph(ACC[ch][1], cx, y - 3 * s, s, bold); }
     else if (ch === 'Ç') { glyph(F.C, cx, y, s, bold); glyph(CED, cx, y + 7 * s, s, bold); }
@@ -494,7 +583,24 @@ function ghostGrid(eye, frame, acc, alt) {
     }
     rows.push(s);
   }
-  return (maskCache[key] = scale2x(rows));
+  // volume : lumière en haut à gauche, ombre en bas à droite, petit reflet
+  const g2 = scale2x(rows).map(r => r.split(''));
+  const cx = (6.5 - C0) * 2, cy = (4.5 - R0) * 2, rx = 13, ry = 11;
+  const body = (r, c) => g2[r] && (g2[r][c] === 'b' || g2[r][c] === 'h');
+  for (let r = 0; r < g2.length; r++) for (let c = 0; c < g2[r].length; c++) {
+    if (g2[r][c] !== 'b') continue;
+    const nx = (c + 0.5 - cx) / rx, ny = (r + 0.5 - cy) / ry, v = -0.6 * nx - 0.8 * ny;
+    if (Math.hypot(nx + 0.42, ny + 0.5) < 0.13) g2[r][c] = 's';
+    else if (!body(r, c + 1) || !body(r + 1, c) || v < -0.62) g2[r][c] = 'd';
+    else if (v > 0.5 || (!body(r - 1, c) && ny < 0.2)) g2[r][c] = 'l';
+  }
+  return (maskCache[key] = g2.map(r => r.join('')));
+}
+const shadeSkinCache = {};
+function skinShades(sk) {
+  if (sk.color === 'rainbow') { const h = (t * 3) % 360; return { b: `hsl(${h},95%,65%)`, l: `hsl(${h},95%,82%)`, d: `hsl(${(h + 25) % 360},80%,45%)` }; }
+  if (sk.color === 'white') return { b: TXT, l: '#ffffff', d: '#b7a4ee' };
+  return shadeSkinCache[sk.color] || (shadeSkinCache[sk.color] = { b: sk.color, l: mixHex(sk.color, '#ffffff', 0.38), d: mixHex(sk.color, '#15082a', 0.45) });
 }
 function brightness(sk) {
   if (sk.color === 'white') return 0.95;
@@ -510,15 +616,31 @@ function lifeEye(seed, look = null) {
   const ph = Math.floor((t + seed * 53) / 150) % 4;
   return ph === 1 ? '-1' : ph === 3 ? '1' : '0';
 }
+// hauteur des accessoires au-dessus de la tête (en lignes du sprite) -> le fantôme tient toujours dans sa case
+function accTop(acc) { const a = ART[acc]; if (!a) return 0; let m = 0; for (const part of [a.on, a.on2]) if (part) for (const [dy] of part) m = Math.min(m, dy); return -m; }
+const ghostH = (id, k) => (11 + accTop(skinById(id).acc)) * k;
+function ghostFitK(id, maxH, kMax) { let k = kMax; while (k > 1 && ghostH(id, k) > maxH) k--; return k; }
+const bboxCache = {};
+function gridBBox(g, key) {
+  if (bboxCache[key]) return bboxCache[key];
+  let r0 = 1e9, r1 = -1, c0 = 1e9, c1 = -1;
+  g.forEach((row, r) => { for (let c = 0; c < row.length; c++) if (row[c] !== '.' && row[c] !== 'o') { r0 = Math.min(r0, r); r1 = Math.max(r1, r); c0 = Math.min(c0, c); c1 = Math.max(c1, c); } });
+  return (bboxCache[key] = { r0, r1, c0, c1 });
+}
 function drawGhost(x, y, frame, sad, skinId = save.skin, k = 2, o = {}) {
   const sk = skinById(skinId);
   const eye = sad ? '3' : (o.eye != null ? o.eye : lifeEye(o.seed || 0, o.look));
   const alt = Math.floor((t + (o.seed || 0) * 31) / 40) % 2 === 1;
   const g = ghostGrid(eye, frame, sk.acc, alt), cell = k / 2;
   const ox = r2(x) + C0 * k, oy = r2(y - 11 * k) + R0 * k;
+  if (window.__audit) { const bb = gridBBox(g, eye + '|' + (frame & 1) + '|' + sk.acc + '|' + alt); audit({ k: 's', str: 'ghost:' + skinId, x0: ox + bb.c0 * cell, x1: ox + (bb.c1 + 1) * cell, y0: oy + bb.r0 * cell, y1: oy + (bb.r1 + 1) * cell }); }
   const L = brightness(sk);
   if (L < 0.4) { ctx.fillStyle = UI; grid(g, ox, oy, cell, 'o'); }
-  ctx.fillStyle = skinColor(sk); grid(g, ox, oy, cell, 'b');
+  const SH = skinShades(sk);
+  ctx.fillStyle = SH.b; grid(g, ox, oy, cell, 'b');
+  ctx.fillStyle = SH.l; grid(g, ox, oy, cell, 'l');
+  ctx.fillStyle = SH.d; grid(g, ox, oy, cell, 'd');
+  ctx.fillStyle = '#ffffff'; grid(g, ox, oy, cell, 's');
   ctx.fillStyle = L < 0.45 ? '#fff' : '#15122b'; grid(g, ox, oy, cell, 'h');
   if (o.fx !== false) skinFX(x, y, sk, k);
   ctx.fillStyle = FG;
@@ -982,7 +1104,8 @@ function claimGift() {
 
 /* ================= Dessin : utilitaires ================= */
 function hash(n) { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); }
-function drawGround(sc, pitList, gy = GY, col = UI) {
+function drawGround(sc, pitList, gy = GY, col = UI, specks = true) {
+  if (!specks) { ctx.fillStyle = '#030207'; for (const p of pitList) ctx.fillRect(r2(p.x), gy, r2(p.w), PIT_D); }
   ctx.fillStyle = col;
   let x = 0;
   const sorted = [...pitList].sort((a, b) => a.x - b.x);
@@ -993,6 +1116,7 @@ function drawGround(sc, pitList, gy = GY, col = UI) {
     x = Math.max(x, px + pw + 1);
   }
   if (x < W) ctx.fillRect(x, gy, W - x, 1);
+  if (!specks) { ctx.fillStyle = FG; return; }
   const start = Math.floor(sc / 3), depth = Math.max(34, VH - OY - gy - 4);
   for (let i = start; i < start + W / 3 + 2; i++) {
     const sx = r2(i * 3 - sc);
@@ -1028,6 +1152,7 @@ function drawHills(sc, b) {
   ctx.fillStyle = FG;
 }
 function box(x, y, w, h, col = null) {
+  audit({ k: 'b', x0: x, x1: x + w, y0: y, y1: y + h });
   if (col) ctx.fillStyle = col;
   ctx.fillRect(x + 2, y, w - 4, 1); ctx.fillRect(x + 2, y + h - 1, w - 4, 1);
   ctx.fillRect(x, y + 2, 1, h - 4); ctx.fillRect(x + w - 1, y + 2, 1, h - 4);
@@ -1043,12 +1168,13 @@ function hexFill(cx, cy, R) {
     ctx.fillRect(cx - hw, Math.round((cy + y) * 2) / 2, hw * 2, 0.5);
   }
 }
-function hexOutline(cx, cy, R, line, fill = BG) { ctx.fillStyle = line; hexFill(cx, cy, R); ctx.fillStyle = fill; hexFill(cx, cy, R - 1); ctx.fillStyle = FG; }
+function hexOutline(cx, cy, R, line, fill = BG) { audit({ k: 'h', x0: cx - R, x1: cx + R, y0: cy - R * 0.866, y1: cy + R * 0.866 }); ctx.fillStyle = line; hexFill(cx, cy, R); ctx.fillStyle = fill; hexFill(cx, cy, R - 1); ctx.fillStyle = FG; }
 function drawButton(label, b, filled = false, color = UI) {
-  if (filled) { ctx.fillStyle = color; ctx.fillRect(b.x, b.y, b.w, b.h); ctx.fillStyle = '#15122b'; }
+  if (filled) { ctx.fillStyle = color; ctx.fillRect(b.x, b.y, b.w, b.h); ctx.fillStyle = '#15122b'; audit({ k: 'b', x0: b.x, x1: b.x + b.w, y0: b.y, y1: b.y + b.h }); }
   else { panel(b.x, b.y, b.w, b.h, color); ctx.fillStyle = TXT; }
-  const s = b.h >= 20 && textW(label, 2) < b.w - 12 ? 2 : 1;
-  text(label, b.x + b.w / 2, b.y + Math.round((b.h - 7 * s) / 2), s, s === 2);
+  const acc = hasAcc(label), s = b.h >= (acc ? 26 : 20) && textW(label, 2) < b.w - 12 ? 2 : 1;
+  const hgt = 7 * s + (acc ? 3 * s : 0);
+  text(label, b.x + b.w / 2, b.y + Math.round((b.h - hgt) / 2) + (acc ? 3 * s : 0), s, s === 2, 'c', null, b.w - 6);
   ctx.fillStyle = FG;
 }
 function drawCoinCount(n, xr, y) {
@@ -1108,8 +1234,9 @@ const ORB_LBL = { fr:{story:'NIVEAUX',inv:'PROFIL',skins:'SKINS',noads:'SANS PUB
 const LANG_BTN = { x: 6, y: 6, w: 22, h: 15 }, SND_BTN = { x: 32, y: 6, w: 17, h: 15 };
 const DAILY_PANEL = { x: 6, y: 246, w: 168, h: 40 };
 function drawMenu() {
-  drawStars();
-  ctx.fillStyle = TXT; spr(MOON, 154, 4);
+  const deco = drawBackdrop(0, t * 0.5, 22);
+  if (deco) { screenT(); ctx.globalAlpha = 0.5; ctx.fillStyle = MENU_BG; ctx.fillRect(0, 0, W, VH); ctx.globalAlpha = 1; sceneT(); }
+  else { drawStars(); ctx.fillStyle = TXT; spr(MOON, 154, 4); }
   screenT();
   panel(LANG_BTN.x, LANG_BTN.y, LANG_BTN.w, LANG_BTN.h, UI, MENU_BG); text(save.lang, LANG_BTN.x + 11, LANG_BTN.y + 4, 1, false, 'c', TXT);
   panel(SND_BTN.x, SND_BTN.y, SND_BTN.w, SND_BTN.h, UI, MENU_BG); ctx.fillStyle = TXT; spr(NOTE, SND_BTN.x + 3.5, SND_BTN.y + 2.5, 2);
@@ -1119,9 +1246,9 @@ function drawMenu() {
   sceneT();
   drawTitle(24);
   // dernier score | record
-  text(pad(save.last || 0), 52, 66, 2, true, 'c', YEL); text(T('last'), 52, 82, 1, false, 'c', TXT);
+  text(pad(save.last || 0), 52, 66, 2, true, 'c', YEL); text(T('last'), 52, 84, 1, false, 'c', TXT, 70);
   ctx.fillStyle = UI; ctx.fillRect(89.5, 66, 1, 22);
-  text(pad(save.best || 0), 128, 66, 2, true, 'c', YEL); text(T('best'), 128, 82, 1, false, 'c', TXT);
+  text(pad(save.best || 0), 128, 66, 2, true, 'c', YEL); text(T('best'), 128, 84, 1, false, 'c', TXT, 70);
   // traits pointillés
   ctx.fillStyle = UI;
   for (const o of Object.values(ORB)) {
@@ -1142,30 +1269,34 @@ function drawMenu() {
   // hexagones secondaires
   for (const [k, o] of Object.entries(ORB)) {
     hexOutline(o.x, o.y, o.r, UI, MENU_BG);
-    const lbl = ORB_LBL[save.lang][k], lines = textW(lbl, 1) > 40 && lbl.includes(' ') ? lbl.split(' ') : [lbl];
-    const iy = lines.length > 1 ? o.y - 17 : o.y - 14;
+    const lbl = ORB_LBL[save.lang][k], hw = dy => 2 * ((o.r - 1) - Math.abs(dy) / ((o.r - 1) * 0.866) * ((o.r - 1) / 2)) - 4;
+    const lines = textW(lbl, 1) > hw(6) && lbl.includes(' ') ? lbl.split(' ') : [lbl];
+    const ly = lines.length > 1 ? o.y - 3 : o.y - 1, iy = ly - (k === 'skins' ? 15 : 18);
     ctx.fillStyle = TXT;
     if (k === 'story') spr(FLAG, o.x - 6, iy, 2);
     if (k === 'inv') { ctx.fillStyle = YEL; spr(CHEST, o.x - 9, iy + 1, 2); }
     if (k === 'skins') drawGhost(o.x - 6.5, iy + 13, (t / 12) | 0, false, save.skin, 1, { seed: 3, fx: false });
     if (k === 'noads') { spr(TV, o.x - 9, iy + 1, 2); ctx.fillStyle = '#ff5a5a'; for (let i = 0; i < 18; i++) ctx.fillRect(o.x + 7 - i, iy + i * 0.85, 1, 1); }
-    lines.forEach((l, li) => text(l, o.x, (lines.length > 1 ? o.y - 1 : o.y + 4) + li * 9, 1, false, 'c', TXT));
+    const lh = lines[1] && hasAcc(lines[1]) ? 10 : 9;
+    lines.forEach((l, li) => text(l, o.x, ly + li * lh, 1, false, 'c', TXT, hw(ly + li * lh + 7 - o.y)));
     if (k === 'noads' && passActive()) text(T('active'), o.x, o.y + o.r * 0.866 + 3, 1, true, 'c', MINT);
   }
   // sol
-  ctx.fillStyle = '#9b86d6'; spr(TOMB_S, 62, 220); spr(TOMB_L, 102, 212);
-  ctx.fillStyle = TXT; spr(TUFT, 4, 232); spr(TUFT, 48, 232); spr(TUFT, 124, 232); spr(TUFT, 166, 232);
-  drawGround(0, [], 238, UI);
+  if (deco) { sprShade(TOMB_S, 62, 220, obPal(TOMB_S, BIOMES[0])); sprShade(TOMB_L, 102, 212, obPal(TOMB_L, BIOMES[0])); ctx.fillStyle = UI; }
+  else { ctx.fillStyle = '#9b86d6'; spr(TOMB_S, 62, 220); spr(TOMB_L, 102, 212); ctx.fillStyle = TXT; }
+  spr(TUFT, 4, 232); spr(TUFT, 48, 232); spr(TUFT, 124, 232); spr(TUFT, 166, 232);
+  drawGround(0, [], 238, UI, !deco);
   // défi du jour
   const ch = dailyChallenge(); rollStats();
   const pr2 = chProgress(ch, save.stats), done = pr2 >= ch.n;
   const P = DAILY_PANEL;
   ctx.fillStyle = MENU_BG; ctx.fillRect(P.x, P.y, P.w, P.h); box(P.x, P.y, P.w, P.h, UI);
-  text(T('daily'), W / 2, P.y + 5, 1, true, 'c', TXT);
+  text(T('daily'), W / 2, P.y + 5, 1, true, 'c', TXT, 120);
   ctx.fillStyle = UI; ctx.fillRect(P.x + 8, P.y + 8, (P.w - textW(T('daily'), 1)) / 2 - 14, 0.5); ctx.fillRect(P.x + P.w / 2 + textW(T('daily'), 1) / 2 + 6, P.y + 8, (P.w - textW(T('daily'), 1)) / 2 - 14, 0.5);
-  text(chText(ch), W / 2, P.y + 16, 1, false, 'c', TXT);
-  box(P.x + 8, P.y + 27, 112, 8, TXT); ctx.fillStyle = MINT; ctx.fillRect(P.x + 10, P.y + 29, r2(108 * pr2 / ch.n), 4);
-  text(done ? (save.claimedCh['d' + dayKey()] ? T('claimed') : T('claim')) : pr2 + '/' + ch.n, P.x + P.w - 8, P.y + 28, 1, false, 'r', done ? MINT : TXT);
+  text(chText(ch), W / 2, P.y + 16, 1, false, 'c', TXT, P.w - 12);
+  const dl = done ? (save.claimedCh['d' + dayKey()] ? T('claimed') : T('claim')) : pr2 + '/' + ch.n, dw = Math.min(textW(dl, 1), 58), bw2 = P.w - 16 - dw - 6;
+  box(P.x + 8, P.y + 27, bw2, 8, TXT); ctx.fillStyle = MINT; ctx.fillRect(P.x + 10, P.y + 29, r2((bw2 - 4) * pr2 / ch.n), 4);
+  text(dl, P.x + P.w - 8, P.y + 28, 1, false, 'r', done ? MINT : TXT, 58);
 }
 
 /* ================= Cadeaux ================= */
@@ -1174,7 +1305,7 @@ function drawGift() {
   drawMenuBackdrop();
   const g = giftQ[0];
   panel(10, 50, 160, 220, UI, PANEL);
-  text(g === 'daily' ? T('dailyGift') : T('weeklyGift'), W / 2, 62, 1, true, 'c', YEL);
+  text(g === 'daily' ? T('dailyGift') : T('weeklyGift'), W / 2, 62, 1, true, 'c', YEL, 148);
   ctx.fillStyle = YEL; spr(GIFT, W / 2 - 14 + Math.sin(t * 0.2) * (stateT < 30 ? 2 : 0), 78, 4);
   if (g === 'daily') {
     const yesterday = dayKey(new Date(Date.now() - 864e5));
@@ -1183,11 +1314,11 @@ function drawGift() {
       const bx = 18 + (i % 4) * 37, by = 118 + Math.floor(i / 4) * 46, r = DAILY_REWARDS[i];
       const cur = i + 1 === next, done = i + 1 < next;
       panel(bx, by, 34, 42, cur ? MINT : done ? DIM : UI, cur ? '#163a33' : MENU_BG);
-      text(T('day') + (i + 1), bx + 17, by + 4, 1, false, 'c', TXT);
-      if (r.c) { ctx.fillStyle = YEL; spr(COIN[0], bx + 12, by + 14, 2); text(String(r.c), bx + 17, by + 28, 1, false, 'c', YEL); }
-      else { ctx.fillStyle = YEL; spr(KEY, bx + 9, by + 15, 2); text('+1', bx + 17, by + 28, 1, false, 'c', YEL); }
-      if (r.k && r.c) { ctx.fillStyle = YEL; spr(KEY, bx + 22, by + 34, 1); }
-      if (done) { ctx.fillStyle = MINT; spr(CHECK, bx + 13, by + 34, 1); }
+      text(T('day') + (i + 1), bx + 17, by + 5, 1, false, 'c', TXT, 30);
+      if (r.c) { ctx.fillStyle = YEL; spr(COIN[0], bx + 12, by + 14, 2); text(String(r.c), bx + 17, by + 26, 1, false, 'c', YEL, 30); }
+      else { ctx.fillStyle = YEL; spr(KEY, bx + 9, by + 15, 2); text('+1', bx + 17, by + 26, 1, false, 'c', YEL, 30); }
+      if (r.k && r.c) { ctx.fillStyle = YEL; spr(KEY, bx + (done ? 6 : 13), by + 35, 1); }
+      if (done) { ctx.fillStyle = MINT; spr(CHECK, bx + (r.k && r.c ? 20 : 13), by + 35, 1); }
     }
     if (passActive()) text('PASS X2', W / 2, 214, 1, true, 'c', MINT);
   } else {
@@ -1204,11 +1335,12 @@ const BACK_BTN = { x: 40, y: 272, w: 100, h: 22 };
 const LV_L = { x: 8, y: 50, w: 18, h: 14 }, LV_R = { x: 154, y: 50, w: 18, h: 14 };
 function drawLevels() {
   const b = lvPage % 4, B = BIOMES[b];
-  drawStars(B.line);
-  text(T('story'), W / 2, 10, 2, true, 'c', TXT);
+  if (drawBackdrop(b, t * 0.3, 60)) { screenT(); ctx.globalAlpha = 0.55; ctx.fillStyle = B.bg; ctx.fillRect(0, 0, W, VH); ctx.globalAlpha = 1; sceneT(); }
+  else drawStars(B.line);
+  text(T('story'), W / 2, 10, fitS(T('story'), 2, 170), true, 'c', TXT, 170);
   let total = 0; for (let i = 0; i < NLEVELS; i++) total += Math.max(0, levelStars(i));
   ctx.fillStyle = YEL; spr(STAR, W / 2 - 26, 30, 1); text(total + '/' + NLEVELS * 3, W / 2 - 16, 31, 1, false, 'l', YEL);
-  text(T('biome')[b], W / 2, 54, 1, true, 'c', B.line);
+  text(T('biome')[b], W / 2, 54, 1, true, 'c', B.line, 120);
   text((lvPage + 1) + '/' + Math.ceil(NLEVELS / LV_PAGE), W / 2, 63, 1, false, 'c', DIM);
   panel(LV_L.x, LV_L.y, LV_L.w, LV_L.h, UI, MENU_BG); ctx.fillStyle = TXT; spr(ARROW_L, LV_L.x + 6, LV_L.y + 2, 2);
   panel(LV_R.x, LV_R.y, LV_R.w, LV_R.h, UI, MENU_BG); ctx.fillStyle = TXT; spr(ARROW_R, LV_R.x + 6, LV_R.y + 2, 2);
@@ -1230,41 +1362,43 @@ const INV_TABS = () => [T('profile'), T('items'), T('challenges'), T('top')];
 const invTab_ = i => ({ x: 4 + i * 43, y: 30, w: 42, h: 14 });
 const NAME_BTN = { x: 112, y: 104, w: 56, h: 16 };
 const sellBtn = i => ({ x: 128, y: 62 + i * 34, w: 42, h: 14 });
-const SELL_ALL = { x: 30, y: 200, w: 120, h: 18 }, CHEST_BTN = { x: 30, y: 226, w: 120, h: 30 };
+const SELL_ALL = { x: 15, y: 200, w: 150, h: 18 }, CHEST_BTN = { x: 15, y: 226, w: 150, h: 30 };
 const chClaim = i => ({ x: 128, y: 70 + i * 50, w: 42, h: 14 });
 function drawInv() {
   drawStars();
-  text(T('inv'), W / 2, 10, 2, true, 'c', TXT);
+  text(T('inv'), W / 2, 10, fitS(T('inv'), 2, 170), true, 'c', TXT, 170);
   INV_TABS().forEach((lbl, i) => {
     const b = invTab_(i);
-    if (invTab === i) { ctx.fillStyle = UI; ctx.fillRect(b.x, b.y, b.w, b.h); text(lbl.length > 7 ? lbl.slice(0, 6) : lbl, b.x + b.w / 2, b.y + 4, 1, false, 'c', '#15122b'); }
-    else { panel(b.x, b.y, b.w, b.h, UI, MENU_BG); text(lbl.length > 7 ? lbl.slice(0, 6) : lbl, b.x + b.w / 2, b.y + 4, 1, false, 'c', TXT); }
+    const ty = b.y + (hasAcc(lbl) ? 5 : 4);
+    if (invTab === i) { ctx.fillStyle = UI; ctx.fillRect(b.x, b.y, b.w, b.h); audit({ k: 'b', x0: b.x, x1: b.x + b.w, y0: b.y, y1: b.y + b.h }); text(lbl, b.x + b.w / 2, ty, 1, false, 'c', '#15122b', b.w - 4); }
+    else { panel(b.x, b.y, b.w, b.h, UI, MENU_BG); text(lbl, b.x + b.w / 2, ty, 1, false, 'c', TXT, b.w - 4); }
   });
   if (invTab === 0) drawProfile(); else if (invTab === 1) drawItems(); else if (invTab === 2) drawChallenges(); else drawTop();
   drawButton(T('back'), BACK_BTN);
 }
 function drawProfile() {
   panel(6, 52, 168, 74);
-  text(T('name'), 12, 58, 1, false, 'l', DIM);
-  text(save.name, 12, 68, save.name.length > 11 ? 1 : 2, true, 'l', TXT);
+  text(T('name'), 12, 58, 1, false, 'l', DIM, 156);
+  text(save.name, 12, 68, fitS(save.name, 2, 156), true, 'l', TXT, 156);
   drawButton(T('edit'), NAME_BTN);
   drawGhost(14, 122, (t / 10) | 0, false, save.skin, 2, { seed: 5 });
-  text(save.skin, 46, 98, 1, true, 'l', TXT);
-  text(T('runs') + ' : ' + (save.totalRuns || 0), 46, 108, 1, false, 'l', DIM);
+  text(save.skin, 46, 96, 1, true, 'l', TXT, NAME_BTN.x - 50);
+  text(T('runs') + ' : ' + (save.totalRuns || 0), 46, 108, 1, false, 'l', DIM, NAME_BTN.x - 50);
   const stars = save.story.reduce((a, b) => a + Math.max(0, b || 0), 0);
-  panel(6, 132, 82, 56); text(T('best'), 47, 138, 1, false, 'c', DIM); text(pad(save.best || 0), 47, 150, 2, true, 'c', YEL); drawStarIcon(22, 170, 1, true); text(stars + '/' + NLEVELS * 3, 34, 171, 1, false, 'l', YEL);
+  panel(6, 132, 82, 56); text(T('best'), 47, 138, 1, false, 'c', DIM, 74); text(pad(save.best || 0), 47, 150, 2, true, 'c', YEL); drawStarIcon(22, 170, 1, true); text(stars + '/' + NLEVELS * 3, 34, 171, 1, false, 'l', YEL);
   panel(92, 132, 82, 56); drawKeyCount(save.keys, 166, 140); drawCoinCount(save.coins, 166, 154);
-  text(save.skins.length + '/' + ALL_SKINS.length + ' SKINS', 133, 172, 1, false, 'c', TXT);
-  if (window.PhantoOnline) text('GOOGLE / APPLE OK', W / 2, 200, 1, false, 'c', MINT);
-  else text(T('online'), W / 2, 200, 1, false, 'c', DIM);
+  text(save.skins.length + '/' + ALL_SKINS.length + ' SKINS', 133, 172, 1, false, 'c', TXT, 74);
+  if (window.PhantoOnline) text('GOOGLE / APPLE OK', W / 2, 200, 1, false, 'c', MINT, 168);
+  else text(T('online'), W / 2, 200, 1, false, 'c', DIM, 168);
 }
 function drawItems() {
   for (let i = 0; i < 4; i++) {
     const y = 52 + i * 34;
     panel(6, y, 168, 30, RARITY[i].color);
     drawItem(i, 12, y + 8, 2, i >= 1);
-    text(T('itemN')[i], 32, y + 6, 1, true, 'l', TXT);
-    text(T('rar')[i], 32, y + 17, 1, false, 'l', RARITY[i].color);
+    const n1 = 'X' + save.items[i], n2 = '+' + RARITY[i].value;
+    text(T('itemN')[i], 32, y + 6, 1, true, 'l', TXT, 122 - textW(n1, 1) - 36);
+    text(T('rar')[i], 32, y + 17, 1, false, 'l', RARITY[i].color, 122 - textW(n2, 1) - 36);
     text('X' + save.items[i], 122, y + 6, 1, true, 'r', TXT);
     text('+' + RARITY[i].value, 122, y + 17, 1, false, 'r', YEL);
     const b = sellBtn(i); b.y = y + 8;
@@ -1276,13 +1410,13 @@ function drawItems() {
   ctx.globalAlpha = can ? 1 : 0.5;
   panel(CHEST_BTN.x, CHEST_BTN.y, CHEST_BTN.w, CHEST_BTN.h, YEL);
   ctx.fillStyle = YEL; spr(CHEST, CHEST_BTN.x + 6, CHEST_BTN.y + 8, 2);
-  text(T('chest'), CHEST_BTN.x + 30, CHEST_BTN.y + 6, 1, true, 'l', TXT);
-  ctx.fillStyle = YEL; spr(KEY, CHEST_BTN.x + 30, CHEST_BTN.y + 17, 1); text('X3  ' + T('open'), CHEST_BTN.x + 40, CHEST_BTN.y + 17, 1, false, 'l', YEL);
+  text(T('chest'), CHEST_BTN.x + 30, CHEST_BTN.y + (hasAcc(T('chest')) ? 7 : 6), 1, true, 'l', TXT, CHEST_BTN.w - 34);
+  ctx.fillStyle = YEL; spr(KEY, CHEST_BTN.x + 30, CHEST_BTN.y + 18, 1); text('X3  ' + T('open'), CHEST_BTN.x + 40, CHEST_BTN.y + 18, 1, false, 'l', YEL, CHEST_BTN.w - 44);
   ctx.globalAlpha = 1;
   if (chestResult && chestResult.t > 0) {
-    panel(20, 110, 140, 50, YEL);
-    text(T('reward'), W / 2, 118, 1, true, 'c', YEL);
-    text(chestResult.txt, W / 2, 134, 1, true, 'c', chestResult.c || TXT);
+    audit({ k: 'cover', x0: 20, x1: 160, y0: 110, y1: 160 }); panel(20, 110, 140, 50, YEL);
+    text(T('reward'), W / 2, 118, 1, true, 'c', YEL, 132);
+    text(chestResult.txt, W / 2, 134, 1, true, 'c', chestResult.c || TXT, 132);
   }
 }
 function drawChallenges() {
@@ -1291,28 +1425,28 @@ function drawChallenges() {
   const rows = [{ c: d, s: save.stats, id: 'd' + dayKey(), title: T('daily') }].concat(WEEKLY.map((c, i) => ({ c, s: save.wstats, id: 'w' + i + weekKey(), title: i === 0 ? T('weekly') : '' })));
   rows.forEach((r, i) => {
     const y = 52 + i * 50;
-    if (r.title) text(r.title, 8, y, 1, true, 'l', i === 0 ? MINT : UI);
+    if (r.title) text(r.title, 8, y, 1, true, 'l', i === 0 ? MINT : UI, 164);
     panel(6, y + 9, 168, 36);
-    text(chText(r.c), 12, y + 14, 1, false, 'l', TXT);
+    text(chText(r.c), 12, y + 14, 1, false, 'l', TXT, 156);
     const p = chProgress(r.c, r.s), done = p >= r.c.n, got = save.claimedCh[r.id];
     box(12, y + 26, 100, 7, TXT); ctx.fillStyle = MINT; ctx.fillRect(13.5, y + 27.5, r2(97 * p / r.c.n), 4);
-    text(p + '/' + r.c.n, 12, y + 36, 1, false, 'l', DIM);
-    text('+' + r.c.r + (r.c.key ? ' +' + r.c.key + 'K' : ''), 112, y + 36, 1, false, 'r', YEL);
+    text(p + '/' + r.c.n, 12, y + 35, 1, false, 'l', DIM, 50);
+    text('+' + r.c.r + (r.c.key ? ' +' + r.c.key + 'K' : ''), 112, y + 35, 1, false, 'r', YEL, 48);
     const b = chClaim(i); b.y = y + 22;
-    if (got) text(T('claimed'), b.x + b.w / 2, b.y + 4, 1, false, 'c', DIM);
+    if (got) text(T('claimed'), b.x + b.w / 2, b.y + 4, 1, false, 'c', DIM, b.w - 2);
     else if (done) drawButton(T('claim'), b, true, MINT);
   });
 }
 function drawTop() {
   panel(6, 52, 168, 196);
-  text(T('local'), W / 2, 58, 1, true, 'c', YEL);
-  text(T('online'), W / 2, 68, 1, false, 'c', DIM);
+  text(T('local'), W / 2, 58, 1, true, 'c', YEL, 156);
+  text(T('online'), W / 2, 68, 1, false, 'c', DIM, 156);
   const list = save.lb.length ? save.lb : [];
   for (let i = 0; i < 10; i++) {
     const y = 82 + i * 16, e = list[i];
     if (i < 3) { ctx.fillStyle = [YEL, '#d9d4ee', '#e0955a'][i]; ctx.fillRect(12, y - 1, 12, 9); text('#' + (i + 1), 18, y, 1, true, 'c', '#15122b'); }
     else text('#' + (i + 1), 18, y, 1, false, 'c', DIM);
-    if (e) { text(save.name, 30, y, 1, false, 'l', TXT); text(pad(e.s), 166, y, 1, true, 'r', YEL); }
+    if (e) { text(save.name, 30, y, 1, false, 'l', TXT, 104); text(pad(e.s), 166, y, 1, true, 'r', YEL); }
     else text('-', 30, y, 1, false, 'l', DIM);
   }
 }
@@ -1340,25 +1474,25 @@ function editName() {
 }
 
 /* ================= Sans pub : pass hebdo + petits packs ================= */
-const PASS_BTN = { x: 106, y: 98, w: 62, h: 20 };
+const PASS_BTN = { x: 106, y: 101, w: 62, h: 20 };
 const packRow = i => ({ x: 8, y: 150 + i * 30, w: 164, h: 26 });
 const MOD_OK = { x: 24, y: 192, w: 62, h: 20 }, MOD_NO = { x: 94, y: 192, w: 62, h: 20 };
 function drawPremium() {
   drawStars();
-  text(T('noads'), W / 2, 10, 2, true, 'c', TXT);
+  text(T('noads'), W / 2, 10, fitS(T('noads'), 2, 170), true, 'c', TXT, 170);
   drawCoinCount(save.coins, 120, 30); drawKeyCount(save.keys, 172, 30);
   // pass hebdo
   ctx.globalAlpha = 0.2 + 0.1 * Math.sin(t * 0.1); ctx.fillStyle = MINT; ctx.fillRect(4, 44, 172, 82); ctx.globalAlpha = 1;
   panel(6, 46, 168, 78, MINT, '#132b2a');
-  text(T('pass'), 12, 52, textW(T('pass'), 2) < 156 ? 2 : 1, true, 'l', MINT);
-  ctx.fillStyle = TXT; spr(TV, 150, 72, 2); ctx.fillStyle = '#ff5a5a'; for (let i = 0; i < 18; i++) ctx.fillRect(166 - i, 71 + i * 0.85, 1, 1);
-  [T('p1'), T('p2'), T('p3')].forEach((l, i) => { ctx.fillStyle = MINT; spr(CHECK, 12, 72 + i * 10, 1); text(l, 22, 72 + i * 10, 1, false, 'l', TXT); });
+  text(T('pass'), 12, 52, fitS(T('pass'), 2, 132), true, 'l', MINT, 132);
+  ctx.fillStyle = TXT; spr(TV, 150, 51, 2); ctx.fillStyle = '#ff5a5a'; for (let i = 0; i < 18; i++) ctx.fillRect(166 - i, 50 + i * 0.85, 1, 1);
+  [T('p1'), T('p2'), T('p3')].forEach((l, i) => { ctx.fillStyle = MINT; spr(CHECK, 12, 72 + i * 10, 1); text(l, 22, 72 + i * 10, 1, false, 'l', TXT, 148); });
   if (passActive()) {
     const days = Math.ceil((save.passUntil - Date.now()) / 864e5);
-    text(T('active'), 12, 108, 1, true, 'l', MINT); text(T('left').replace('{n}', days), 12, 117, 1, false, 'l', DIM);
+    text(T('active'), 12, 104, 1, true, 'l', MINT, 156); text(T('left').replace('{n}', days), 12, 115, 1, false, 'l', DIM, 156);
   } else drawButton(priceLabel(PASS), PASS_BTN, true, MINT);
   // petits packs
-  text(T('packs'), W / 2, 136, 1, true, 'c', UI);
+  text(T('packs'), W / 2, 136, 1, true, 'c', UI, 168);
   PACKS.forEach((p, i) => {
     const r = packRow(i);
     panel(r.x, r.y, r.w, r.h, i === 2 ? YEL : UI);
@@ -1366,48 +1500,51 @@ function drawPremium() {
     text(String(p.coins), r.x + 20, r.y + 9, 1, true, 'l', YEL);
     if (p.keys) { ctx.fillStyle = YEL; spr(KEY, r.x + 54, r.y + 9, 2); text('X' + p.keys, r.x + 72, r.y + 9, 1, false, 'l', TXT); }
     const pb = { x: r.x + r.w - 50, y: r.y + 4, w: 46, h: 18 };
-    ctx.fillStyle = i === 2 ? YEL : UI; ctx.fillRect(pb.x, pb.y, pb.w, pb.h);
-    text(priceLabel(p), pb.x + pb.w / 2, pb.y + 6, 1, false, 'c', '#15122b');
+    ctx.fillStyle = i === 2 ? YEL : UI; ctx.fillRect(pb.x, pb.y, pb.w, pb.h); audit({ k: 'b', x0: pb.x, x1: pb.x + pb.w, y0: pb.y, y1: pb.y + pb.h });
+    text(priceLabel(p), pb.x + pb.w / 2, pb.y + 6, 1, false, 'c', '#15122b', pb.w - 4);
   });
   drawButton(T('back'), BACK_BTN.y + 0 > 0 ? { x: 40, y: 276, w: 100, h: 22 } : BACK_BTN);
-  if (toast) { panel(30, 140, 120, 30, MINT); text(toast.a, W / 2, 152, 1, true, 'c', MINT); }
+  if (toast) { audit({ k: 'cover', x0: 30, x1: 150, y0: 140, y1: 170 }); panel(30, 140, 120, 30, MINT); text(toast.a, W / 2, 152, 1, true, 'c', MINT, 112); }
   if (modal) drawModal();
 }
 function drawModal() {
   ctx.globalAlpha = 0.7; ctx.fillStyle = MENU_BG; ctx.fillRect(0, -OY, W, VH); ctx.globalAlpha = 1;
+  audit({ k: 'cover', x0: 0, x1: W, y0: -OY, y1: VH });
   panel(14, 96, 152, 126, YEL); box(16, 98, 148, 122, YEL);
-  text(T('demo'), W / 2, 108, 1, true, 'c', YEL); text(T('noPay'), W / 2, 122, 1, false, 'c', TXT);
-  text(modal.pass ? T('pass') : '+' + modal.coins + (modal.keys ? ' +' + modal.keys + ' ' + T('keys') : ''), W / 2, 142, 1, true, 'c', TXT);
-  text(priceLabel(modal), W / 2, 162, 2, true, 'c', YEL);
+  text(T('demo'), W / 2, 108, 1, true, 'c', YEL, 140); text(T('noPay'), W / 2, 122, 1, false, 'c', TXT, 140);
+  text(modal.pass ? T('pass') : '+' + modal.coins + (modal.keys ? ' +' + modal.keys + ' ' + T('keys') : ''), W / 2, 142, 1, true, 'c', TXT, 140);
+  text(priceLabel(modal), W / 2, 162, 2, true, 'c', YEL, 140);
   drawButton(T('ok'), MOD_OK, true, MINT); drawButton(T('cancel'), MOD_NO);
 }
 
 /* ================= Skins ================= */
 const TAB = [{ x: 10, y: 32, w: 78, h: 14 }, { x: 92, y: 32, w: 78, h: 14 }];
-const card = i => ({ x: 6 + (i % 3) * 57, y: 104 + Math.floor(i / 3) * 52, w: 54, h: 49 });
-const PG_L = { x: 46, y: 262, w: 18, h: 14 }, PG_R = { x: 116, y: 262, w: 18, h: 14 };
-const SHOP_BACK = { x: 40, y: 282, w: 100, h: 22 };
+const card = i => ({ x: 6 + (i % 3) * 57, y: 102 + Math.floor(i / 3) * 58, w: 54, h: 57 });
+const PG_L = { x: 46, y: 277, w: 18, h: 14 }, PG_R = { x: 116, y: 277, w: 18, h: 14 };
+const SHOP_BACK = { x: 40, y: 294, w: 100, h: 22 };
 const BUY_BTN = { x: 112, y: 76, w: 60, h: 18 };
 function shopList() { return shopTab === 0 ? SKINS.slice(shopPage * PER_PAGE, shopPage * PER_PAGE + PER_PAGE) : SEASONS[currentSeason().key]; }
 function drawShop() {
   drawStars();
-  text(T('skins'), W / 2, 8, 2, true, 'c', TXT);
+  text(T('skins'), W / 2, 8, 2, true, 'c', TXT, 90);
   drawCoinCount(save.coins, W - 8, 9);
   const sea = currentSeason();
   [T('skins'), T('season')].forEach((lbl, i) => {
     const b = TAB[i];
-    if (shopTab === i) { ctx.fillStyle = i ? '#ff8a1f' : UI; ctx.fillRect(b.x, b.y, b.w, b.h); text(lbl, b.x + b.w / 2, b.y + 4, 1, false, 'c', '#15122b'); }
-    else { panel(b.x, b.y, b.w, b.h, i ? '#ff8a1f' : UI, MENU_BG); text(lbl, b.x + b.w / 2, b.y + 4, 1, false, 'c', TXT); }
+    const ty = b.y + (hasAcc(lbl) ? 5 : 4);
+    if (shopTab === i) { ctx.fillStyle = i ? '#ff8a1f' : UI; ctx.fillRect(b.x, b.y, b.w, b.h); audit({ k: 'b', x0: b.x, x1: b.x + b.w, y0: b.y, y1: b.y + b.h }); text(lbl, b.x + b.w / 2, ty, 1, false, 'c', '#15122b', b.w - 4); }
+    else { panel(b.x, b.y, b.w, b.h, i ? '#ff8a1f' : UI, MENU_BG); text(lbl, b.x + b.w / 2, ty, 1, false, 'c', TXT, b.w - 4); }
   });
   // grand aperçu animé du skin choisi
   const sk = skinById(preview || save.skin);
   panel(6, 50, 168, 50, sk.season ? '#ff8a1f' : UI);
   const bob = Math.sin(t * 0.08) * 2;
-  drawGhost(14, 94 + bob, (t / 8) | 0, false, sk.id, 3, { seed: 7 });
-  text(sk.id, 64, 56, 2, true, 'l', TXT);
-  text(sk.season ? T('season') + ' ' + T('seasonN')[sk.season] : '', 64, 70, 1, false, 'l', '#ff8a1f');
+  const pk = ghostFitK(sk.id, 40, 3);
+  drawGhost(14 + (3 - pk) * 6.5, 94 + bob, (t / 8) | 0, false, sk.id, pk, { seed: 7 });
+  text(sk.id, 64, 56, 2, true, 'l', TXT, 104);
+  text(sk.season ? T('season') + ' ' + T('seasonN')[sk.season] : '', 64, 72, 1, false, 'l', '#ff8a1f', BUY_BTN.x - 68);
   const owned = save.skins.includes(sk.id), eq = save.skin === sk.id;
-  if (eq) text(T('equip'), 142, 82, 1, true, 'c', MINT);
+  if (eq) text(T('equip'), 142, 82, 1, true, 'c', MINT, 58);
   else if (owned) drawButton(T('ok'), BUY_BTN, true, MINT);
   else { const can = save.coins >= sk.price; drawButton(String(sk.price), BUY_BTN, can, can ? YEL : DIM); }
   const list = shopList();
@@ -1417,10 +1554,11 @@ function drawShop() {
     const o = save.skins.includes(s.id), e = save.skin === s.id, sel = (preview || save.skin) === s.id;
     panel(c.x, c.y, c.w, c.h, sel ? TXT : s.season ? '#ff8a1f' : UI, MENU_BG);
     if (e) box(c.x + 2, c.y + 2, c.w - 4, c.h - 4, MINT);
-    drawGhost(c.x + 14, c.y + 31, ((t / 12) | 0) + j, false, s.id, 2, { seed: j, fx: false });
-    text(s.id, c.x + c.w / 2, c.y + 34, 1, false, 'c', TXT);
-    if (o) { ctx.fillStyle = MINT; spr(CHECK, c.x + c.w / 2 - 4, c.y + 42, 1); }
-    else { const ps = String(s.price), wT = textW(ps, 1) + 8; ctx.fillStyle = YEL; spr(COIN[0], c.x + c.w / 2 - wT / 2, c.y + 42, 1); text(ps, c.x + c.w / 2 - wT / 2 + 8, c.y + 42, 1, false, 'l', save.coins >= s.price ? YEL : DIM); }
+    const gk = ghostFitK(s.id, 36, 2);
+    drawGhost(c.x + c.w / 2 - 6.5 * gk, c.y + 38, ((t / 12) | 0) + j, false, s.id, gk, { seed: j, fx: false });
+    text(s.id, c.x + c.w / 2, c.y + 40, 1, false, 'c', TXT, c.w - 6);
+    if (o) { ctx.fillStyle = MINT; spr(CHECK, c.x + c.w / 2 - 4, c.y + 48, 1); }
+    else { const ps = String(s.price), wT = textW(ps, 1) + 8; ctx.fillStyle = YEL; spr(COIN[0], c.x + c.w / 2 - wT / 2, c.y + 48, 1); text(ps, c.x + c.w / 2 - wT / 2 + 8, c.y + 48, 1, false, 'l', save.coins >= s.price ? YEL : DIM); }
   });
   if (shopTab === 0) {
     panel(PG_L.x, PG_L.y, PG_L.w, PG_L.h, UI, MENU_BG); ctx.fillStyle = TXT; spr(ARROW_L, PG_L.x + 6, PG_L.y + 2, 2);
@@ -1428,8 +1566,8 @@ function drawShop() {
     text((shopPage + 1) + '/' + PAGES, W / 2, PG_L.y + 4, 1, false, 'c', TXT);
   } else {
     const ms = sea.end - Date.now(), d = Math.floor(ms / 864e5), h = Math.floor(ms % 864e5 / 36e5);
-    text(T('seasonN')[sea.key], W / 2, 162, 2, true, 'c', '#ff8a1f');
-    text(T('ends').replace('{d}', d).replace('{h}', h), W / 2, 182, 1, false, 'c', TXT);
+    text(T('seasonN')[sea.key], W / 2, 170, fitS(T('seasonN')[sea.key], 2, 168), true, 'c', '#ff8a1f', 168);
+    text(T('ends').replace('{d}', d).replace('{h}', h), W / 2, 190, 1, false, 'c', TXT, 168);
   }
   drawButton(T('back'), SHOP_BACK);
 }
@@ -1440,17 +1578,18 @@ const SUB = { x: 50, y: 258, w: 80, h: 16 };
 function drawOver() {
   drawStars();
   const o = T('over');
-  text(o[0], W / 2, 24, 3, true, 'c', TXT);
-  text(o[1], W / 2, 50, 3, true, 'c', TXT);
+  const os = Math.min(fitS(o[0], 3, 170), fitS(o[1], 3, 170));
+  text(o[0], W / 2, 14 + (hasAcc(o[0]) ? 3 * os : 0), os, true, 'c', TXT, 170);
+  text(o[1], W / 2, 14 + (hasAcc(o[0]) ? 3 * os : 0) + 8 * os + (hasAcc(o[1]) ? 3 * os : 0), os, true, 'c', TXT, 170);
   if (mode === 'story') {
-    text(T('level') + ' ' + (levelIdx + 1), W / 2, 84, 2, true, 'c', TXT);
+    text(T('level') + ' ' + (levelIdx + 1), W / 2, 84, fitS(T('level') + ' ' + (levelIdx + 1), 2, 170), true, 'c', TXT, 170);
     const prog = Math.max(0, Math.min(1, 1 - (finishX - GX) / levelLen));
     box(40, 106, 100, 8, TXT); ctx.fillStyle = MINT; ctx.fillRect(42, 108, r2(96 * prog), 4);
     text(Math.round(prog * 100) + ' %', W / 2, 120, 1, false, 'c', TXT);
   } else {
     text(T('score'), W / 2, 78, 1, false, 'c', TXT);
     text(pad(score), W / 2, 88, 3, true, 'c', YEL);
-    text(newBest ? T('rec') : T('best') + ' ' + pad(save.best), W / 2, 114, 1, true, 'c', newBest ? MINT : TXT);
+    text(newBest ? T('rec') : T('best') + ' ' + pad(save.best), W / 2, 114, 1, true, 'c', newBest ? MINT : TXT, 170);
   }
   const line = '+' + earned + ' ' + T('coins');
   text(line, W / 2 + 7, 134, 1, false, 'c', YEL); ctx.fillStyle = YEL; spr(coinFrame((t / 8) | 0), W / 2 - textW(line, 1) / 2 - 8, 132, 2);
@@ -1464,8 +1603,8 @@ function drawOver() {
 }
 function drawClear() {
   drawStars();
-  text(T('level') + ' ' + (levelIdx + 1), W / 2, 34, 3, true, 'c', TXT);
-  text(T('cleared'), W / 2, 66, 2, true, 'c', MINT);
+  text(T('level') + ' ' + (levelIdx + 1), W / 2, 34, fitS(T('level') + ' ' + (levelIdx + 1), 3, 170), true, 'c', TXT, 170);
+  text(T('cleared'), W / 2, 66, fitS(T('cleared'), 2, 170), true, 'c', MINT, 170);
   for (let s = 0; s < 3; s++) {
     if (stateT < 20 + s * 14) continue;
     const on = s < clearInfo.stars, bounce = on ? Math.max(0, 6 - (stateT - 20 - s * 14) * 0.5) : 0;
@@ -1481,12 +1620,13 @@ function drawClear() {
 }
 
 /* ================= Continuer ? ================= */
-const REV_AD = { x: 24, y: 168, w: 132, h: 22 }, REV_KEY = { x: 24, y: 196, w: 132, h: 22 }, REV_NO = { x: 50, y: 228, w: 80, h: 16 };
+const REV_AD = { x: 18, y: 168, w: 144, h: 22 }, REV_KEY = { x: 18, y: 196, w: 144, h: 22 }, REV_NO = { x: 42, y: 228, w: 96, h: 16 };
 function drawRevive() {
   drawPlayScene();
   ctx.globalAlpha = 0.75; ctx.fillStyle = '#0b0918'; ctx.fillRect(0, -OY, W, VH); ctx.globalAlpha = 1;
+  audit({ k: 'cover', x0: 0, x1: W, y0: -OY, y1: VH });
   panel(14, 80, 152, 176, MINT);
-  text(T('cont'), W / 2, 92, 2, true, 'c', MINT);
+  text(T('cont'), W / 2, 92, fitS(T('cont'), 2, 140), true, 'c', MINT, 140);
   const left = Math.max(0, 1 - stateT / 330);
   ctx.fillStyle = DIM; hexFill(W / 2, 134, 22); ctx.fillStyle = MINT;
   const R = 22, Rh = R * 0.866;
@@ -1500,8 +1640,8 @@ function drawRevive() {
 function drawAdDemo() {
   ctx.fillStyle = '#000'; ctx.fillRect(0, -OY, W, VH);
   panel(20, 110, 140, 90, YEL, '#111');
-  text(T('adDemo'), W / 2, 124, 2, true, 'c', YEL);
-  text(T('noPay'), W / 2, 146, 1, false, 'c', TXT);
+  text(T('adDemo'), W / 2, 124, fitS(T('adDemo'), 2, 128), true, 'c', YEL, 128);
+  text(T('noPay'), W / 2, 146, 1, false, 'c', TXT, 128);
   box(40, 170, 100, 8, TXT); ctx.fillStyle = YEL; ctx.fillRect(42, 172, r2(96 * Math.min(1, stateT / 180)), 4);
 }
 
@@ -1516,18 +1656,30 @@ function drawPortal(o) {
   }
   ctx.globalAlpha = 0.18; ctx.fillStyle = col; ctx.fillRect(x - 6, CY, 12, GY - CY); ctx.globalAlpha = 1;
 }
+const COIN_PAL = pal('#f7c94b', '#fff3c4', '#c0821c');
+function obPal(sp, B) {
+  if (sp === STUMP) return pal('#8a5a3a', '#6fbf6a', '#4e3020');
+  if (sp === PINE) return pal('#2f8a62', '#6fd39a', '#174536');
+  if (sp === CHAND) return pal(YEL, '#fff3c4', '#b07a1a');
+  if (sp === SPIRE) return pal('#8a8db0', '#d6d9ee', '#4a4d6a');
+  return pal(B.ob, null, B.ob2);
+}
 function drawPlayScene() {
   const B = curB();
-  drawStars(B.line);
-  if (biome === 3) { ctx.fillStyle = '#dfe8ff'; spr(MOON, 130, 20, 4); }
-  drawHills(scroll * 0.25, biome);
-  ctx.fillStyle = B.line; ctx.globalAlpha = 0.5; for (const c of clouds) spr(c.big ? CLOUD_L : CLOUD_S, c.x, c.y); ctx.globalAlpha = 1;
+  const deco = drawBackdrop(biome, scroll);
+  if (!deco) {
+    drawStars(B.line);
+    if (biome === 3) { ctx.fillStyle = '#dfe8ff'; spr(MOON, 130, 20, 4); }
+    drawHills(scroll * 0.25, biome);
+    ctx.fillStyle = B.line; ctx.globalAlpha = 0.5; for (const c of clouds) spr(c.big ? CLOUD_L : CLOUD_S, c.x, c.y); ctx.globalAlpha = 1;
+  }
   if (biome === 2) { // plafond du manoir
     ctx.fillStyle = B.line; ctx.fillRect(0, CY, W, 1);
+    if (deco) { ctx.fillStyle = '#12060f'; ctx.fillRect(0, CY - 30, W, 30); }
     ctx.fillStyle = dither(B.bg2); ctx.fillRect(0, CY - 30, W, 30);
     for (let i = Math.floor(scroll / 40); i < Math.floor(scroll / 40) + 6; i++) { const x = r2(i * 40 - scroll); ctx.fillStyle = B.ob2; ctx.fillRect(x, CY - 30, 2, 30); }
   }
-  ctx.fillStyle = TXT; for (const tf of tufts) if (!inPit(tf.x + 2) && !inPit(tf.x + 8)) spr(TUFT, tf.x, GY - 5);
+  ctx.fillStyle = deco ? B.line : TXT; for (const tf of tufts) if (!inPit(tf.x + 2) && !inPit(tf.x + 8)) spr(TUFT, tf.x, GY - 5);
   if (mode === 'run' && !passedBest) {
     const rx = r2(GX + 13 + (bestAtStart * 10 - dist));
     if (rx > -4 && rx < W + 40) { ctx.fillStyle = YEL; for (let y = GY - 70; y < GY; y += 3) ctx.fillRect(rx, y, 0.5, 1.5); text(T('best'), rx + 3, GY - 76, 1, false, 'l', YEL); }
@@ -1539,20 +1691,17 @@ function drawPlayScene() {
   for (const o of obstacles) {
     if (o.x > W + 30 || o.x < -40) continue;
     if (o.type === 'portal') { drawPortal(o); continue; }
-    if (o.type === 'bat') { ctx.fillStyle = BATC; const s = biome === 1 ? OWL : BAT; if (o.side < 0) sprFlipY(s[((t / 6) | 0) % 2], o.x, o.y); else spr(s[((t / 6) | 0) % 2], o.x, o.y); }
-    else {
-      ctx.fillStyle = o.spr === CHAND ? YEL : B.ob;
-      if (o.side < 0) sprFlipY(o.spr, o.x, CY); else spr(o.spr, o.x, GY - o.h + 1);
-    }
+    if (o.type === 'bat') { const s = (biome === 1 ? OWL : BAT)[((t / 6) | 0) % 2]; sprShade(s, o.x, o.y, pal(BATC), o.side < 0); }
+    else sprShade(o.spr, o.x, o.side < 0 ? CY : GY - o.h + 1, obPal(o.spr, B), o.side < 0);
   }
-  ctx.fillStyle = YEL; for (const c of coins) if (c.x < W + 20) spr(coinFrame(((t / 6) | 0) + (c.x | 0)), c.x, c.y, 2);
+  for (const c of coins) if (c.x < W + 20) sprShade(coinFrame(((t / 6) | 0) + (c.x | 0)), c.x, c.y, COIN_PAL);
   for (const s of starsL) if (s.x < W + 20) { ctx.fillStyle = YEL; spr(STAR, s.x, s.y + Math.sin(t * 0.1 + s.x) * 1.5, 2); }
   for (const p of pickups) if (p.x < W + 20) {
     const yy = p.y + Math.sin(t * 0.12 + p.x) * 2;
     if (p.key) { ctx.globalAlpha = 0.3; ctx.fillStyle = YEL; ctx.fillRect(p.x - 2, yy - 2, 20, 14); ctx.globalAlpha = 1; ctx.fillStyle = YEL; spr(KEY, p.x, yy, 2); }
     else drawItem(p.rar, p.x, yy, 2, true);
   }
-  drawGround(scroll, pits, GY, B.line);
+  drawGround(scroll, pits, GY, B.line, !deco);
   // brume de la forêt : cache les obstacles au loin
   if (biome === 1) {
     const dens = 0.55 + 0.35 * Math.sin(dist * 0.003);
@@ -1568,6 +1717,13 @@ function drawPlayScene() {
   drawDust();
   for (const p of popups) text(p.txt, p.x, p.y, 1, true, 'c', p.c);
   const dying = state === 'dying';
+  if (deco && !inPit(GX + 6)) { // ombre portée du fantôme
+    const hgt = ghost.side > 0 ? GY - ghost.y : ghost.y - CY, sw = Math.max(4, 11 - hgt * 0.08);
+    ctx.globalAlpha = Math.max(0.12, 0.45 - hgt * 0.004); ctx.fillStyle = '#000';
+    const sy = ghost.side > 0 ? GY + 1 : CY - 2;
+    ctx.fillRect(r2(GX + 6.5 - sw), sy, r2(sw * 2), 1); ctx.fillRect(r2(GX + 6.5 - sw * 0.7), sy + (ghost.side > 0 ? 1 : -0.5), r2(sw * 1.4), 0.5);
+    ctx.globalAlpha = 1;
+  }
   if (!(dying && (stateT / 4 | 0) % 2) && !(ghost.inv > 0 && ((t / 4) | 0) % 2)) {
     const squash = ghost.land > 0 ? 1 : 0;
     const look = ghost.vy * ghost.side < -1 ? '0' : '1';
@@ -1586,21 +1742,22 @@ function drawHUD() {
   } else {
     text(pad(score), W - 8, 10, 2, true, 'r', YEL);
     drawCoinCount(runCoins, W - 8, 28);
-    text(T('biome')[biome], 30, 14, 1, false, 'l', curB().line);
+    text(T('biome')[biome], 30, 14, 1, false, 'l', curB().line, W - 8 - textW(pad(score), 2) - 6 - 30);
   }
   if (runKeys || save.keys) drawKeyCount(save.keys + runKeys, W - 8, 41);
   sceneT();
   if (banner && (banner.t < 110 || ((banner.t / 5) | 0) % 2)) {
-    const bw = Math.max(textW(banner.a, 1), banner.b ? textW(banner.b, 1) : 0) + 12;
+    const bw = Math.min(W - 8, Math.max(textW(banner.a, 1), banner.b ? textW(banner.b, 1) : 0) + 12);
     ctx.globalAlpha = 0.85; ctx.fillStyle = '#0b0918'; ctx.fillRect(W / 2 - bw / 2, 106, bw, banner.b ? 28 : 18); ctx.globalAlpha = 1;
     box(W / 2 - bw / 2, 106, bw, banner.b ? 28 : 18, banner.c || TXT);
-    text(banner.a, W / 2, 111, 1, true, 'c', banner.c || TXT);
-    if (banner.b) text(banner.b, W / 2, 122, 1, false, 'c', TXT);
+    text(banner.a, W / 2, 111, 1, true, 'c', banner.c || TXT, bw - 8);
+    if (banner.b) text(banner.b, W / 2, 122, 1, false, 'c', TXT, bw - 8);
   }
   if (state === 'pause') {
+    audit({ k: 'cover', x0: 18, x1: 162, y0: 100, y1: 196 });
     panel(18, 100, 144, 96, UI, MENU_BG);
-    text(T('pause'), W / 2, 112, 3, true, 'c', TXT);
-    text(T('resume'), W / 2, 142, 1, false, 'c', TXT);
+    text(T('pause'), W / 2, 112, fitS(T('pause'), 3, 132), true, 'c', TXT, 132);
+    text(T('resume'), W / 2, 142, 1, false, 'c', TXT, 132);
     drawButton(T('menu'), PAUSE_MENU);
   }
 }
@@ -1797,7 +1954,10 @@ requestAnimationFrame(loop);
 window.__phanto = { get state() { return state; }, set score(v) { dist = v * 10; }, save, setState, startGame, enterMenu,
   shop: (tab, page) => { shopTab = tab; shopPage = page || 0; setState('shop'); }, inv: i => { invTab = i; setState('inv'); },
   levels: pg => { lvPage = pg; setState('levels'); }, setBiome: b => { biome = b; biomeDist = 0; }, finish: () => { finishX = GX; },
-  dbg: () => ({ ghost, obstacles, pits, speed, finishX, levelLen, runStars, state, biome }), forceJump: () => jump(), press: () => press(null), levelDef };
+  dbg: () => ({ ghost, obstacles, pits, speed, finishX, levelLen, runStars, state, biome }),
+  set: o => { if ('giftQ' in o) giftQ = o.giftQ; if ('modal' in o) modal = o.modal; if ('chestResult' in o) chestResult = o.chestResult; if ('toast' in o) toast = o.toast;
+    if ('clearInfo' in o) clearInfo = o.clearInfo; if ('mode' in o) mode = o.mode; if ('runItems' in o) runItems = o.runItems; if ('runKeys' in o) runKeys = o.runKeys;
+    if ('earned' in o) earned = o.earned; if ('preview' in o) preview = o.preview; if ('newBest' in o) newBest = o.newBest; if ('levelIdx' in o) levelIdx = o.levelIdx; if ('score' in o) score = o.score; }, forceJump: () => jump(), press: () => press(null), levelDef };
 })();
 </script>
 </body>
