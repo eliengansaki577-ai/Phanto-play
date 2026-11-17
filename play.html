@@ -1258,7 +1258,9 @@ function drawMenu() {
   panel(SND_BTN.x, SND_BTN.y, SND_BTN.w, SND_BTN.h, UI, MENU_BG); ctx.fillStyle = TXT; spr(NOTE, SND_BTN.x + 3.5, SND_BTN.y + 2.5, 2);
   if (save.muted) { ctx.fillStyle = '#ff5a5a'; for (let i = 0; i < 22; i++) ctx.fillRect(SND_BTN.x + 3 + i * 0.5, SND_BTN.y + 2 + i * 0.5, 0.5, 0.5); }
   drawCoinCount(save.coins, W - 7, 9);
-  drawKeyCount(save.keys, W - 7, 22);
+  // écran 16:9 (pas de marge en haut) : les clés passent sur la même ligne que les pièces, au-dessus du titre
+  if (OY < 16) drawKeyCount(save.keys, W - 7 - textW(String(save.coins), 1) - 13 - 8, 9);
+  else drawKeyCount(save.keys, W - 7, 22);
   sceneT();
   drawTitle(24);
   // dernier score | record
@@ -1432,6 +1434,8 @@ function drawItems() {
   text(T('chest'), CHEST_BTN.x + 30, CHEST_BTN.y + (hasAcc(T('chest')) ? 7 : 6), 1, true, 'l', TXT, CHEST_BTN.w - 34);
   ctx.fillStyle = YEL; spr(KEY, CHEST_BTN.x + 30, CHEST_BTN.y + 18, 1); text('X3  ' + T('open'), CHEST_BTN.x + 40, CHEST_BTN.y + 18, 1, false, 'l', YEL, CHEST_BTN.w - 44);
   ctx.globalAlpha = 1;
+  // chances du coffre affichées avant l'ouverture (règle Google Play sur les objets aléatoires)
+  text(T('coins') + ' 45%  ' + T('rar')[1] + ' 35%  ' + T('rar')[2] + ' 17%  ' + T('rar')[3] + ' 3%', W / 2, CHEST_BTN.y + CHEST_BTN.h + 4, 1, false, 'c', DIM, 168);
   if (chestResult && chestResult.t > 0) {
     audit({ k: 'cover', x0: 20, x1: 160, y0: 110, y1: 160 }); panel(20, 110, 140, 50, YEL);
     text(T('reward'), W / 2, 118, 1, true, 'c', YEL, 132);
