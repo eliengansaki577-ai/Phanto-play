@@ -1,0 +1,45 @@
+name: Build Pixel Studio APK
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'studio/**', 'pixel-studio-android/**', '.github/workflows/build-pixel-studio.yml' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pixel-studio-android
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Mettre l'app web dans l'APK
+        run: |
+          mkdir -p app/src/main/assets
+          rm -rf app/src/main/assets/studio
+          cp -r ../studio app/src/main/assets/studio
+          rm -f app/src/main/assets/studio/sw.js
+      - name: Construire l'APK
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+      - name: Publier l'APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk ../PixelStudio.apk
+          cd ..
+          gh release delete pixel-studio --yes --cleanup-tag || true
+          gh release create pixel-studio PixelStudio.apk \
+            --title "Pixel Studio – dernière version" \
+            --notes "PixelStudio.apk : à installer sur Android. Sur iPhone, ouvre https://eliengansaki577-ai.github.io/Phanto-play/studio/ dans Safari puis Partager → Sur l'écran d'accueil." \
+            --latest=false
