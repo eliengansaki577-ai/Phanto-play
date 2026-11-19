@@ -1,0 +1,29 @@
+name: Vendor Pixel Studio libs
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/vendor-libs.yml']
+permissions:
+  contents: write
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch mediabunny
+        run: |
+          mkdir -p /tmp/mb && cd /tmp/mb
+          npm pack mediabunny@1.46.0
+          tar xzf mediabunny-1.46.0.tgz
+          ls -la package/dist/bundles
+          mkdir -p $GITHUB_WORKSPACE/studio/vendor
+          cp package/dist/bundles/mediabunny.min.mjs $GITHUB_WORKSPACE/studio/vendor/ || cp package/dist/bundles/*.mjs $GITHUB_WORKSPACE/studio/vendor/
+          cp package/LICENSE* $GITHUB_WORKSPACE/studio/vendor/ 2>/dev/null || true
+          ls -la $GITHUB_WORKSPACE/studio/vendor
+      - name: Commit
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add studio/vendor
+          git diff --cached --quiet || git commit -m "Vendor mediabunny 1.46.0 for Pixel Studio"
+          git push
